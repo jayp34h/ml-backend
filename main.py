@@ -8,7 +8,6 @@ import uvicorn
 
 app = FastAPI(title="AgriNova ML API")
 
-# Add CORS so the Flutter web/app can communicate with it
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,71 +16,123 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 1. LOAD YOUR MODEL HERE
-# We load the crop detection model
+# ---- LOAD AND INSPECT MODEL ----
+raw_pkl = None
+model = None
+labels = None
+model_type_info = "unknown"
+
 try:
-    with open('plant_disease_model.pkl', 'rb') as file:
-        model = pickle.load(file)
-    print("Model loaded successfully!")
+    with open('plant_disease_model.pkl', 'rb') as f:
+        raw_pkl = pickle.load(f)
+    print(f"Pickle loaded. Type: {type(raw_pkl)}")
+
+    if isinstance(raw_pkl, dict):
+        print(f"Dict keys: {list(raw_pkl.keys())}")
+        for key in ['model', 'classifier', 'estimator', 'net', 'clf']:
+            if key in raw_pkl:
+                model = raw_pkl[key]
+                break
+        for key in ['labels', 'classes', 'class_names', 'label_names']:
+            if key in raw_pkl:
+                labels = raw_pkl[key]
+                break
+        if model is None:
+            for v in raw_pkl.values():
+                if hasattr(v, 'predict'):
+                    model = v
+                    break
+        model_type_info = f"dict-wrapped, model type: {type(model)}"
+
+    elif isinstance(raw_pkl, list):
+        for item in raw_pkl:
+            if hasattr(item, 'predict') and model is None:
+                model = item
+            elif isinstance(item, (list, dict)) and labels is None:
+                labels = item
+        model_type_info = f"list-wrapped, model type: {type(model)}"
+
+    elif hasattr(raw_pkl, 'predict'):
+        model = raw_pkl
+        model_type_info = f"direct model: {type(model)}"
+
+    else:
+        model_type_info = f"UNRECOGNIZED: {type(raw_pkl)}"
+
+    print(f"Model info: {model_type_info}")
+
 except Exception as e:
     print(f"Error loading model: {e}")
-    model = None
+
 
 def process_image(image_bytes):
-    """
-    Transforms the incoming image bytes into a format your model understands.
-    You MUST adjust the image size (e.g., 224x224) based on what your model expects!
-    """
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
-    image = image.resize((224, 224)) # Change to your model's input size
-    
-    # Convert image to numpy array and normalize if needed
+    image = image.resize((224, 224))
     img_array = np.array(image) / 255.0
-    
-    # Add batch dimension (1, 224, 224, 3) generally expected by models
-    img_array = np.expand_dims(img_array, axis=0) 
+    img_array = np.expand_dims(img_array, axis=0)
     return img_array
+
 
 @app.get("/")
 def read_root():
-    return {"message": "AgriNova ML Server is Running!"}
+    return {"message": "AgriNova Crop Detection Server is Running!"}
+
+
+@app.get("/debug")
+def debug_model():
+    return {
+        "model_type_info": model_type_info,
+        "model_loaded": model is not None,
+        "labels": list(labels)[:10] if labels else "none",
+        "raw_pkl_type": str(type(raw_pkl)),
+        "raw_pkl_keys": list(raw_pkl.keys()) if isinstance(raw_pkl, dict) else "N/A",
+    }
+
 
 @app.post("/predict")
 async def predict_disease(file: UploadFile = File(...)):
     try:
-        # Read the image uploaded from Flutter
-        image_bytes = await file.read()
-        
-        # Process image
-        processed_image = process_image(image_bytes)
-        
-        # 2. RUN INFERENCE 
         if model is None:
-            return {"status": "error", "message": "Model not loaded on server."}
-        
-        # Predict the image! Assuming the model returns a direct prediction format
+            return {
+                "status": "error",
+                "message": f"Model not ready. Visit /debug. Info: {model_type_info}"
+            }
+
+        image_bytes = await file.read()
+        processed_image = process_image(image_bytes)
         prediction = model.predict(processed_image)
-        
-        # Depending on how the `.pkl` was trained, the prediction format might be an array or string.
-        # usually pred[0] is the result for standard scikit-learn/tensorflow.
-        # We try to cleanly serialize it to string so JSON doesn't crash
+
+        confidence = 0.99
         try:
-            detected_disease = str(prediction[0])
-            confidence = 0.99 # if model outputs probs, you extract them, otherwise putting placeholder
-        except:
+            raw_pred = prediction[0]
+            if labels is not None:
+                if isinstance(raw_pred, (int, np.integer)):
+                    detected_disease = str(labels[int(raw_pred)])
+                elif isinstance(raw_pred, np.ndarray):
+                    idx = int(np.argmax(raw_pred))
+                    detected_disease = str(labels[idx])
+                    confidence = float(np.max(raw_pred))
+                else:
+                    detected_disease = str(raw_pred)
+            else:
+                if isinstance(raw_pred, np.ndarray):
+                    detected_disease = str(int(np.argmax(raw_pred)))
+                    confidence = float(np.max(raw_pred))
+                else:
+                    detected_disease = str(raw_pred)
+        except Exception:
             detected_disease = str(prediction)
             confidence = 0.0
-        
-        result = {
+
+        return {
             "disease_name": detected_disease,
-            "confidence": confidence,
+            "confidence": round(float(confidence), 4),
             "status": "success"
         }
-        
-        return result
-        
+
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
