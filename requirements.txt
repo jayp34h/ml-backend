@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-multipart
+Pillow
+scikit-learn
+numpy
+# Note: Add torch or tensorflow here if your .pkl requires it to decode!
