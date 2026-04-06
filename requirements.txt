@@ -4,4 +4,5 @@ python-multipart
 Pillow
 scikit-learn
 numpy
-# Note: Add torch or tensorflow here if your .pkl requires it to decode!
+tensorflow
+# Note: tensorflow is needed to reconstruct the Keras model from saved weights
