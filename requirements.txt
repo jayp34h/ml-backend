@@ -1,8 +1,7 @@
-fastapi
-uvicorn
-python-multipart
-Pillow
-scikit-learn
-numpy
-tensorflow
-# Note: tensorflow is needed to reconstruct the Keras model from saved weights
+fastapi==0.110.0
+uvicorn==0.29.0
+python-multipart==0.0.9
+Pillow==10.2.0
+numpy==1.26.4
+tensorflow-cpu==2.15.0
+
