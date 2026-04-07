@@ -6,6 +6,23 @@ import numpy as np
 from PIL import Image
 import uvicorn
 
+# --- Fix for NumPy 2.x pickles being loaded in NumPy 1.x ---
+class RenameUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module == 'numpy._core.numeric':
+            module = 'numpy.core.numeric'
+        elif module == 'numpy._core.multiarray':
+            module = 'numpy.core.multiarray'
+        elif module == 'numpy._core.umath':
+            module = 'numpy.core.umath'
+        elif module == 'numpy._core._multiarray_umath':
+            module = 'numpy.core._multiarray_umath'
+        elif module == 'numpy._core':
+            module = 'numpy.core'
+        return super().find_class(module, name)
+# -------------------------------------------------------------
+
+
 app = FastAPI(title="AgriNova ML API")
 
 app.add_middleware(
@@ -24,7 +41,7 @@ model_info = "not loaded"
 
 try:
     with open('plant_disease_model.pkl', 'rb') as f:
-        data = pickle.load(f)
+        data = RenameUnpickler(f).load()
 
     print(f"PKL keys: {list(data.keys())}")
 
