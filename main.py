@@ -46,7 +46,12 @@ try:
     print(f"PKL keys: {list(data.keys())}")
 
     class_names = data.get('class_names', [])
-    img_size = data.get('img_size', 224)
+    raw_img_size = data.get('img_size', 224)
+    # Ensure img_size is an integer even if saved as a tuple (e.g., (224, 224))
+    if isinstance(raw_img_size, (tuple, list)):
+        img_size = int(raw_img_size[0])
+    else:
+        img_size = int(raw_img_size)
     model_weights = data.get('model_weights', None)
     num_classes = data.get('num_classes', len(class_names))
 
