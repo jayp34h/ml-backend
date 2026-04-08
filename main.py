@@ -189,10 +189,35 @@ def recommend_crop(data: CropData):
         ]])
 
         prediction = rec_model.predict(features)
-        crop = str(prediction[0]) if len(prediction) > 0 else "Unknown"
+        
+        crop_dict = {
+            0: "apple", 1: "banana", 2: "blackgram", 3: "chickpea",
+            4: "coconut", 5: "coffee", 6: "cotton", 7: "grapes",
+            8: "jute", 9: "kidneybeans", 10: "lentil", 11: "maize",
+            12: "mango", 13: "mothbeans", 14: "mungbean", 15: "muskmelon",
+            16: "orange", 17: "papaya", 18: "pigeonpeas", 19: "pomegranate",
+            20: "rice", 21: "watermelon"
+        }
 
-        # Nicely capitalise (e.g. "kidneybeans" → "Kidneybeans")
-        crop = crop.title()
+        if len(prediction) > 0:
+            pred_val = int(prediction[0])
+            crop = crop_dict.get(pred_val, "Unknown")
+        else:
+            crop = "Unknown"
+
+        # Nicely capitalise (e.g. "kidneybeans" → "Kidney Beans")
+        if crop == "kidneybeans":
+            crop = "Kidney Beans"
+        elif crop == "mothbeans":
+            crop = "Moth Beans"
+        elif crop == "mungbean":
+            crop = "Mung Bean"
+        elif crop == "pigeonpeas":
+            crop = "Pigeon Peas"
+        elif crop == "blackgram":
+            crop = "Black Gram"
+        else:
+            crop = crop.title()
 
         return {"recommended_crop": crop, "status": "success"}
 
