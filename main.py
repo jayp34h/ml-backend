@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from io import BytesIO
 import pickle
+import joblib
 import warnings
 import numpy as np
 from PIL import Image
@@ -96,8 +97,7 @@ rec_model = None
 rec_model_info: str = "not loaded"
 
 try:
-    with open('best_model.pkl', 'rb') as f:
-        rec_model = RenameUnpickler(f).load()
+    rec_model = joblib.load('best_model.pkl')
     rec_model_info = f"Loaded OK — type: {type(rec_model).__name__}"
     print(f"[Recommendation Model] {rec_model_info}")
 except Exception as e:
