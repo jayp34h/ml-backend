@@ -164,6 +164,28 @@ async def predict_disease(file: UploadFile = File(...)):
         idx = int(np.argmax(predictions[0]))
         confidence = float(np.max(predictions[0]))
 
+        # --- SIMPLE VALIDATION (OOD Detection) ---
+        # 1. Reject skin/flesh colored images (e.g., legs, hands) based on dominant RGB
+        # In skin, Red is significantly higher than Green and Blue.
+        avg_r = np.mean(processed[0, :, :, 0])
+        avg_g = np.mean(processed[0, :, :, 1])
+        avg_b = np.mean(processed[0, :, :, 2])
+        
+        is_skin_colored = (avg_r > avg_g + 0.15) and (avg_r > avg_b + 0.20)
+        
+        if is_skin_colored:
+            return {
+                "status": "error", 
+                "message": "Incorrect photo detected. The image appears to be a body part or unrelated object. Please upload a clear photo of a crop leaf."
+            }
+
+        # 2. Reject low confidence predictions (often indicates unrelated objects)
+        if confidence < 0.75:
+            return {
+                "status": "error", 
+                "message": "Incorrect photo. The AI could not confidently detect a crop disease. Please upload a clear photo of a crop leaf."
+            }
+
         if disease_class_names and idx < len(disease_class_names):
             raw = disease_class_names[idx]
             display = raw.replace('___', ' - ').replace('__', ' ').replace('_', ' ')
