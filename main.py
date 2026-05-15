@@ -187,6 +187,29 @@ async def predict_disease(file: UploadFile = File(...)):
         image_bytes = await file.read()
         raw = preprocess_image(image_bytes, disease_img_size)   # shape: (1, H, W, 3), float32 [0-255]
 
+        # --- IMAGE VALIDATION (on normalized [0,1] values) ---
+        norm = raw / 255.0
+        avg_r = float(np.mean(norm[0, :, :, 0]))
+        avg_g = float(np.mean(norm[0, :, :, 1]))
+        avg_b = float(np.mean(norm[0, :, :, 2]))
+
+        # Reject skin/body parts: skin has high red, warm orange/brown tone
+        # A hand: R≈0.65, G≈0.50, B≈0.40 → triggers both conditions
+        # A green leaf: R≈0.25, G≈0.50, B≈0.20 → does NOT trigger
+        # A yellow leaf: R≈0.55, G≈0.55, B≈0.20 → R - G < 0.10 → does NOT trigger
+        if (avg_r > avg_g + 0.10) and (avg_r > avg_b + 0.15):
+            return {
+                "status": "error",
+                "message": "Invalid image detected. This appears to be a body part or non-plant object. Please upload a clear photo of a crop leaf."
+            }
+
+        # Reject very dark / near-black images (photos taken in pitch darkness)
+        if max(avg_r, avg_g, avg_b) < 0.10:
+            return {
+                "status": "error",
+                "message": "Image is too dark. Please upload a well-lit photo of a crop leaf."
+            }
+
         # --- TFLite Inference ---
         input_dtype = disease_input_details[0]['dtype']
 
@@ -194,8 +217,6 @@ async def predict_disease(file: UploadFile = File(...)):
             # Quantized model: expects uint8 [0, 255]
             input_tensor = raw.clip(0, 255).astype(np.uint8)
         elif input_dtype == np.float32:
-            # Check if model uses [-1, 1] normalization (MobileNetV2 style)
-            # by inspecting quantization params; if scale==1 and zp==0, use [0,1]
             quant = disease_input_details[0].get('quantization', (0.0, 0))
             if quant[0] != 0.0:
                 # Quantized float — apply scale/zero-point
@@ -213,6 +234,13 @@ async def predict_disease(file: UploadFile = File(...)):
         idx = int(np.argmax(output_data[0]))
         confidence = float(np.max(output_data[0]))
 
+        # Reject if model is uncertain (likely not a plant image)
+        if confidence < 0.70:
+            return {
+                "status": "error",
+                "message": "Could not confidently identify a crop disease. Please upload a clear, close-up photo of a crop leaf in good lighting."
+            }
+
         if disease_class_names and idx < len(disease_class_names):
             raw_label = disease_class_names[idx]
             display = raw_label.replace('___', ' - ').replace('__', ' ').replace('_', ' ')
@@ -223,6 +251,7 @@ async def predict_disease(file: UploadFile = File(...)):
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 
 
