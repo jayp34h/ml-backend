@@ -2,34 +2,13 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from io import BytesIO
-import pickle
 import joblib
 import warnings
 import numpy as np
 from PIL import Image
 import uvicorn
 import tensorflow as tf
-from tensorflow.keras.applications import MobileNetV2
-from tensorflow.keras import layers, models as keras_models
 warnings.filterwarnings("ignore", category=UserWarning)
-
-# ---------------------------------------------------------------
-# Fix for pickles saved with NumPy 2.x being loaded in NumPy 1.x
-# NumPy 2.0 renamed numpy.core → numpy._core. This custom unpickler
-# transparently redirects those references so the file loads cleanly.
-# ---------------------------------------------------------------
-class RenameUnpickler(pickle.Unpickler):
-    _MAP = {
-        'numpy._core.numeric':              'numpy.core.numeric',
-        'numpy._core.multiarray':           'numpy.core.multiarray',
-        'numpy._core.umath':                'numpy.core.umath',
-        'numpy._core._multiarray_umath':    'numpy.core._multiarray_umath',
-        'numpy._core':                      'numpy.core',
-    }
-    def find_class(self, module, name):
-        module = self._MAP.get(module, module)
-        return super().find_class(module, name)
-
 
 # ---------------------------------------------------------------
 # FastAPI App
@@ -46,40 +25,76 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------
-# MODEL 1 — Crop Disease Detection  (plant_disease_model.pkl)
-#   Type  : TensorFlow/Keras weights wrapped in pickle
-#   Arch  : MobileNetV2
-#   Input : Image (224×224 RGB by default)
+# MODEL 1 — Crop Disease Detection  (plant_disease.tflite)
+#   Type  : TensorFlow Lite model
+#   Arch  : CNN optimised for plant disease classification
+#   Input : Image (224×224 RGB, normalised to [0, 1])
+#   Output: 38-class softmax probabilities (PlantVillage dataset)
 # ---------------------------------------------------------------
-disease_model = None
-disease_class_names: list = []
+
+# Standard PlantVillage 38-class labels (alphabetical order used during training)
+DISEASE_CLASS_NAMES = [
+    "Apple___Apple_scab",
+    "Apple___Black_rot",
+    "Apple___Cedar_apple_rust",
+    "Apple___healthy",
+    "Blueberry___healthy",
+    "Cherry_(including_sour)___Powdery_mildew",
+    "Cherry_(including_sour)___healthy",
+    "Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot",
+    "Corn_(maize)___Common_rust_",
+    "Corn_(maize)___Northern_Leaf_Blight",
+    "Corn_(maize)___healthy",
+    "Grape___Black_rot",
+    "Grape___Esca_(Black_Measles)",
+    "Grape___Leaf_blight_(Isariopsis_Leaf_Spot)",
+    "Grape___healthy",
+    "Orange___Haunglongbing_(Citrus_greening)",
+    "Peach___Bacterial_spot",
+    "Peach___healthy",
+    "Pepper,_bell___Bacterial_spot",
+    "Pepper,_bell___healthy",
+    "Potato___Early_blight",
+    "Potato___Late_blight",
+    "Potato___healthy",
+    "Raspberry___healthy",
+    "Soybean___healthy",
+    "Squash___Powdery_mildew",
+    "Strawberry___Leaf_scorch",
+    "Strawberry___healthy",
+    "Tomato___Bacterial_spot",
+    "Tomato___Early_blight",
+    "Tomato___Late_blight",
+    "Tomato___Leaf_Mold",
+    "Tomato___Septoria_leaf_spot",
+    "Tomato___Spider_mites Two-spotted_spider_mite",
+    "Tomato___Target_Spot",
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
+    "Tomato___Tomato_mosaic_virus",
+    "Tomato___healthy",
+]
+
+disease_interpreter = None
+disease_input_details = None
+disease_output_details = None
+disease_class_names: list = DISEASE_CLASS_NAMES
 disease_img_size: int = 224
 disease_model_info: str = "not loaded"
 
 try:
-    with open('plant_disease_model.pkl', 'rb') as f:
-        data = RenameUnpickler(f).load()
+    disease_interpreter = tf.lite.Interpreter(model_path="plant_disease.tflite")
+    disease_interpreter.allocate_tensors()
+    disease_input_details  = disease_interpreter.get_input_details()
+    disease_output_details = disease_interpreter.get_output_details()
 
-    disease_class_names = data.get('class_names', [])
-    raw_size = data.get('img_size', 224)
-    disease_img_size = int(raw_size[0]) if isinstance(raw_size, (tuple, list)) else int(raw_size)
-    model_weights = data.get('model_weights', None)
-    num_classes = data.get('num_classes', len(disease_class_names))
+    # Auto-detect image size from the model's input tensor shape [1, H, W, C]
+    input_shape = disease_input_details[0]['shape']
+    disease_img_size = int(input_shape[1])   # height dimension
 
-    print(f"[Disease Model] classes={num_classes}, img_size={disease_img_size}")
-
-    if model_weights is not None:
-        base = MobileNetV2(weights=None, include_top=False, input_shape=(disease_img_size, disease_img_size, 3))
-        x = base.output
-        x = layers.GlobalAveragePooling2D()(x)
-        x = layers.Dense(128, activation='relu')(x)
-        preds = layers.Dense(num_classes, activation='softmax')(x)
-        disease_model = keras_models.Model(inputs=base.input, outputs=preds)
-        disease_model.set_weights(model_weights)
-        disease_model_info = f"MobileNetV2 loaded OK — {num_classes} classes"
-    else:
-        disease_model_info = "model_weights key is None in pkl"
-
+    disease_model_info = (
+        f"TFLite loaded OK — {len(disease_class_names)} classes, "
+        f"input {disease_img_size}×{disease_img_size}"
+    )
     print(f"[Disease Model] {disease_model_info}")
 
 except Exception as e:
@@ -132,10 +147,11 @@ def preprocess_image(image_bytes: bytes, size: int) -> np.ndarray:
 # Routes
 # ---------------------------------------------------------------
 @app.get("/")
+@app.head("/")
 def root():
     return {
         "message": "AgriNova ML API is running!",
-        "disease_model_ready": disease_model is not None,
+        "disease_model_ready": disease_interpreter is not None,
         "recommendation_model_ready": rec_model is not None,
     }
 
@@ -144,7 +160,7 @@ def root():
 def debug():
     return {
         "disease_model_info": disease_model_info,
-        "disease_model_loaded": disease_model is not None,
+        "disease_model_loaded": disease_interpreter is not None,
         "disease_class_count": len(disease_class_names),
         "disease_img_size": disease_img_size,
         "rec_model_info": rec_model_info,
@@ -155,25 +171,22 @@ def debug():
 @app.post("/predict")
 async def predict_disease(file: UploadFile = File(...)):
     try:
-        if disease_model is None:
+        if disease_interpreter is None:
             return {"status": "error", "message": f"Model not ready: {disease_model_info}"}
 
         image_bytes = await file.read()
-        processed = preprocess_image(image_bytes, disease_img_size)
-        predictions = disease_model.predict(processed)
-        idx = int(np.argmax(predictions[0]))
-        confidence = float(np.max(predictions[0]))
+        processed = preprocess_image(image_bytes, disease_img_size)   # shape: (1, H, W, 3) float32
 
         # --- SIMPLE VALIDATION (OOD Detection) ---
         avg_r = np.mean(processed[0, :, :, 0])
         avg_g = np.mean(processed[0, :, :, 1])
         avg_b = np.mean(processed[0, :, :, 2])
-        
+
         # 1. Reject skin/flesh colored and red objects (e.g., legs, hands, brick walls)
         is_skin_colored = (avg_r > avg_g + 0.15) and (avg_r > avg_b + 0.20)
         if is_skin_colored:
             return {
-                "status": "error", 
+                "status": "error",
                 "message": "Incorrect photo detected. The image appears to be a body part or unrelated object. Please upload a clear photo of a crop leaf."
             }
 
@@ -183,7 +196,7 @@ async def predict_disease(file: UploadFile = File(...)):
         channel_std = np.std(processed[0], axis=2)
         mean_color_variance = np.mean(channel_std)
         is_neutral = mean_color_variance < 0.05
-        
+
         # Also reject extremely dark photos where features can't be distinguished
         is_very_dark = np.max([avg_r, avg_g, avg_b]) < 0.15
 
@@ -201,10 +214,22 @@ async def predict_disease(file: UploadFile = File(...)):
                 "message": "Incorrect photo detected. This appears to be an unrelated object (too much blue). Please upload a valid crop leaf."
             }
 
+        # --- TFLite Inference ---
+        # Ensure input dtype matches what the model expects (usually float32)
+        input_dtype = disease_input_details[0]['dtype']
+        input_tensor = processed.astype(input_dtype)
+
+        disease_interpreter.set_tensor(disease_input_details[0]['index'], input_tensor)
+        disease_interpreter.invoke()
+        output_data = disease_interpreter.get_tensor(disease_output_details[0]['index'])  # shape: (1, num_classes)
+
+        idx = int(np.argmax(output_data[0]))
+        confidence = float(np.max(output_data[0]))
+
         # 4. Reject low confidence predictions (often indicates unrelated objects)
         if confidence < 0.75:
             return {
-                "status": "error", 
+                "status": "error",
                 "message": "Incorrect photo. The AI could not confidently detect a crop disease. Please upload a clear photo of a crop leaf."
             }
 
