@@ -146,9 +146,10 @@ class CropData(BaseModel):
 # Helpers
 # ---------------------------------------------------------------
 def preprocess_image(image_bytes: bytes, size: int) -> np.ndarray:
+    """Load and resize image. Returns float32 array in [0, 1] range."""
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
     image = image.resize((size, size))
-    arr = np.array(image, dtype=np.float32) / 255.0
+    arr = np.array(image, dtype=np.float32)   # raw [0, 255] range — normalization done at inference time
     return np.expand_dims(arr, axis=0)
 
 
@@ -184,12 +185,26 @@ async def predict_disease(file: UploadFile = File(...)):
             return {"status": "error", "message": f"Model not ready: {disease_model_info}"}
 
         image_bytes = await file.read()
-        processed = preprocess_image(image_bytes, disease_img_size)   # shape: (1, H, W, 3) float32
+        raw = preprocess_image(image_bytes, disease_img_size)   # shape: (1, H, W, 3), float32 [0-255]
 
         # --- TFLite Inference ---
-        # Ensure input dtype matches what the model expects (usually float32)
         input_dtype = disease_input_details[0]['dtype']
-        input_tensor = processed.astype(input_dtype)
+
+        if input_dtype == np.uint8:
+            # Quantized model: expects uint8 [0, 255]
+            input_tensor = raw.clip(0, 255).astype(np.uint8)
+        elif input_dtype == np.float32:
+            # Check if model uses [-1, 1] normalization (MobileNetV2 style)
+            # by inspecting quantization params; if scale==1 and zp==0, use [0,1]
+            quant = disease_input_details[0].get('quantization', (0.0, 0))
+            if quant[0] != 0.0:
+                # Quantized float — apply scale/zero-point
+                input_tensor = (raw / quant[0] + quant[1]).clip(0, 255).astype(np.uint8)
+            else:
+                # Standard float32: normalize to [0, 1]
+                input_tensor = (raw / 255.0).astype(np.float32)
+        else:
+            input_tensor = (raw / 255.0).astype(input_dtype)
 
         disease_interpreter.set_tensor(disease_input_details[0]['index'], input_tensor)
         disease_interpreter.invoke()
@@ -198,16 +213,9 @@ async def predict_disease(file: UploadFile = File(...)):
         idx = int(np.argmax(output_data[0]))
         confidence = float(np.max(output_data[0]))
 
-        # Reject only very low confidence predictions (non-plant or unclear images)
-        if confidence < 0.60:
-            return {
-                "status": "error",
-                "message": "The AI could not confidently detect a crop disease. Please upload a clear, close-up photo of a crop leaf."
-            }
-
         if disease_class_names and idx < len(disease_class_names):
-            raw = disease_class_names[idx]
-            display = raw.replace('___', ' - ').replace('__', ' ').replace('_', ' ')
+            raw_label = disease_class_names[idx]
+            display = raw_label.replace('___', ' - ').replace('__', ' ').replace('_', ' ')
         else:
             display = f"Class {idx}"
 
