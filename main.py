@@ -186,43 +186,6 @@ async def predict_disease(file: UploadFile = File(...)):
         image_bytes = await file.read()
         processed = preprocess_image(image_bytes, disease_img_size)   # shape: (1, H, W, 3) float32
 
-        # --- SIMPLE VALIDATION (OOD Detection) ---
-        avg_r = np.mean(processed[0, :, :, 0])
-        avg_g = np.mean(processed[0, :, :, 1])
-        avg_b = np.mean(processed[0, :, :, 2])
-
-        # 1. Reject skin/flesh colored and red objects (e.g., legs, hands, brick walls)
-        is_skin_colored = (avg_r > avg_g + 0.15) and (avg_r > avg_b + 0.20)
-        if is_skin_colored:
-            return {
-                "status": "error",
-                "message": "Incorrect photo detected. The image appears to be a body part or unrelated object. Please upload a clear photo of a crop leaf."
-            }
-
-        # 2. Reject grayscale/neutral/dark objects (laptops, keyboards, plain walls)
-        # Realistic plant images have noticeable color variance across RGB channels (green/yellow/brown).
-        # Grayscale objects have R ≈ G ≈ B, leading to very low standard deviation across the color channels.
-        channel_std = np.std(processed[0], axis=2)
-        mean_color_variance = np.mean(channel_std)
-        is_neutral = mean_color_variance < 0.05
-
-        # Also reject extremely dark photos where features can't be distinguished
-        is_very_dark = np.max([avg_r, avg_g, avg_b]) < 0.15
-
-        if is_neutral or is_very_dark:
-            return {
-                "status": "error",
-                "message": "Incorrect photo detected. This appears to be a non-plant object (e.g., device, table, plain background) or the photo is too dark. Please upload a clear crop leaf."
-            }
-
-        # 3. Reject predominantly blue objects (e.g., clothing, screens, sky)
-        is_blueish = (avg_b > avg_g + 0.05) and (avg_b > avg_r + 0.05)
-        if is_blueish:
-            return {
-                "status": "error",
-                "message": "Incorrect photo detected. This appears to be an unrelated object (too much blue). Please upload a valid crop leaf."
-            }
-
         # --- TFLite Inference ---
         # Ensure input dtype matches what the model expects (usually float32)
         input_dtype = disease_input_details[0]['dtype']
@@ -235,11 +198,11 @@ async def predict_disease(file: UploadFile = File(...)):
         idx = int(np.argmax(output_data[0]))
         confidence = float(np.max(output_data[0]))
 
-        # 4. Reject low confidence predictions (often indicates unrelated objects)
-        if confidence < 0.75:
+        # Reject only very low confidence predictions (non-plant or unclear images)
+        if confidence < 0.60:
             return {
                 "status": "error",
-                "message": "Incorrect photo. The AI could not confidently detect a crop disease. Please upload a clear photo of a crop leaf."
+                "message": "The AI could not confidently detect a crop disease. Please upload a clear, close-up photo of a crop leaf."
             }
 
         if disease_class_names and idx < len(disease_class_names):
@@ -252,6 +215,7 @@ async def predict_disease(file: UploadFile = File(...)):
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 
 @app.post("/recommend-crop")
