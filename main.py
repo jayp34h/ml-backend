@@ -7,7 +7,12 @@ import warnings
 import numpy as np
 from PIL import Image
 import uvicorn
-import tensorflow as tf
+try:
+    # Lightweight package — works on Linux (Render deployment)
+    from tflite_runtime.interpreter import Interpreter as TFLiteInterpreter
+except ImportError:
+    # Fallback for Windows (local development) — uses full tensorflow
+    from tensorflow.lite.python.interpreter import Interpreter as TFLiteInterpreter
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # ---------------------------------------------------------------
@@ -82,7 +87,7 @@ disease_img_size: int = 224
 disease_model_info: str = "not loaded"
 
 try:
-    disease_interpreter = tf.lite.Interpreter(model_path="plant_disease.tflite")
+    disease_interpreter = TFLiteInterpreter(model_path="plant_disease.tflite")
     disease_interpreter.allocate_tensors()
     disease_input_details  = disease_interpreter.get_input_details()
     disease_output_details = disease_interpreter.get_output_details()

@@ -3,7 +3,8 @@ uvicorn==0.29.0
 python-multipart==0.0.9
 Pillow==10.2.0
 numpy==1.26.4
-tensorflow-cpu==2.15.0
+tflite-runtime==2.14.0; sys_platform == "linux"
+tensorflow-cpu==2.15.0; sys_platform == "win32"
 scikit-learn>=1.0.0
 joblib>=1.0.0
 
