@@ -8,11 +8,15 @@ import numpy as np
 from PIL import Image
 import uvicorn
 try:
-    # Lightweight package — works on Linux (Render deployment)
-    from tflite_runtime.interpreter import Interpreter as TFLiteInterpreter
+    # ai-edge-litert: Google's official lightweight TFLite runtime (supports newer models)
+    from ai_edge_litert.interpreter import Interpreter as TFLiteInterpreter
 except ImportError:
-    # Fallback for Windows (local development) — uses full tensorflow
-    from tensorflow.lite.python.interpreter import Interpreter as TFLiteInterpreter
+    try:
+        # Fallback: older tflite-runtime package
+        from tflite_runtime.interpreter import Interpreter as TFLiteInterpreter
+    except ImportError:
+        # Final fallback: full tensorflow (Windows local dev)
+        from tensorflow.lite.python.interpreter import Interpreter as TFLiteInterpreter
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # ---------------------------------------------------------------
